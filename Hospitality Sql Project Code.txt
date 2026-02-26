@@ -1,0 +1,167 @@
+use hospitality_dataset;
+show tables;
+select * from fact_bookings;
+					## 1)Total Revenue
+Select concat(round(sum(revenue_realized)/1000000000,1),"B")  as Total_Revenue From Fact_bookings;
+Select sum(revenue_realized)  as Total_Revenue From Fact_bookings;
+					## 2)Total_Bookings
+select count(booking_id) as Total_Bookings from Fact_bookings;
+					## 3)Cancellation_Rate
+select round(sum(case when booking_status = "Cancelled" then 1 else 0 end)*100/count(*),2)As Cancellation_Rate from Fact_bookings;
+					## 4)Revenue by Hotels
+select H.property_name , sum(B.revenue_realized) as Total_Revenue from dim_hotels as H 
+join fact_bookings as B on B.property_id=H.property_id 
+group by 1
+order by 2 desc;
+					## 5)Revenue by city
+select H.city , sum(B.revenue_realized) as Total_Revenue from dim_hotels as H
+join fact_bookings as B on B.property_id=H.property_id 
+group by 1
+order by 2 desc;
+					## 6)Class wise Revenue
+select R.room_class, sum(B.revenue_realized) as Total_Revenue from dim_rooms as R
+join fact_bookings as B on B.room_category = R.room_id
+group by 1
+order by 2 desc;
+					## 7)Checked_out vs Cancelled vs No_show
+
+select "Checked out" as Status_type , count(*) as Count_Values from fact_bookings 
+where booking_status = "Checked out"
+union all 
+select "Cancelled" , count(*) from fact_bookings 
+where booking_status = "Cancelled"
+union all
+select "No show" ,count(*) from fact_bookings 
+where booking_status = "No Show";
+
+						## 8)Occupancy %
+select round(sum(successful_bookings)/sum(capacity)*100,2) as Occupancy_Rate  
+from fact_aggregated_bookings;
+
+						## 9)Utilize Capacity
+select sum(successful_bookings) as Utilize_Capacity  from fact_aggregated_bookings;
+
+						## 10)Revenue by week
+select D.week_no ,sum(b.revenue_realized) as Total_Revenue from dim_date as D
+join fact_bookings as b on b.check_in_date = D.date
+group by 1
+order by 2 desc;
+
+Update dim_date set date = str_to_date(date,"%d-%b-%y");
+Set sql_safe_updates=0;
+Select * from dim_date;
+### Drop table dim_date;
+
+						## 11)Weekday & Weekend Revenue
+select D.day_type , sum(B.revenue_realized)as Total_revenue from dim_date as D
+join fact_bookings as B 
+on D.date = B.check_in_date
+group by 1
+order by 2 desc;
+
+select D.day_type , concat(round(sum(B.revenue_realized)/1000000000,2),"B" )as Total_revenue from dim_date as D
+join fact_bookings as B 
+on D.date = B.check_in_date
+group by 1
+order by 2 desc;
+
+						## 12) Weekly Booking Trend 
+select D.week_no , Count(B.booking_id)as Total_Bookings from dim_date as D
+join fact_bookings as B 
+on D.date = B.check_in_date
+group by 1
+order by 2 desc;
+
+						## 13) Top 5 Hotels by Revenue
+Select H.property_name, sum(B.revenue_realized) as Total_Revenue from dim_hotels as H
+join fact_bookings as B 
+on H.property_id = B.property_id
+group by 1
+order by 2 desc
+limit 5;
+
+						## 14) Revenue Leakage (Approximate) /  ##  Forcast vs Actual Revenue Gap
+select ((sum(revenue_generated)-Sum(revenue_realized))/sum(revenue_generated))*100 as Leakage_Rate 
+from fact_bookings;
+
+						## 14) Revenue Leakage (Cancelled + No Show)
+select (sum(case 
+when booking_status in ("Cancelled" , "No Show") then revenue_realized else 0 end)
+/Sum(revenue_realized))*100 as Leakage_Rate
+from fact_bookings;
+						## 15) ADR (Appx)
+Select (sum(B.revenue_realized)/sum(F.successful_bookings)) as ADR From fact_bookings as B
+join fact_aggregated_bookings as F
+on B.check_in_date = F.check_in_date;
+						## 15) ADR (Accurate)
+Select sum(revenue_realized)/
+Count(case when booking_status ="Checked Out" then 1 else 0 end) as ADR
+from fact_bookings;
+						##16)RevPar
+Select (sum(B.revenue_realized)/sum(F.capacity)) as RevPar From fact_bookings as B
+join fact_aggregated_bookings as F
+on B.property_id = F.property_id;
+
+
+
+
+				 ## 17) Demand Volatility Analysis (Hotels with unstable weekly bookings)
+select H.property_name, stddev(W.weekly_Bookings) as Volatility from 
+(select B.property_id, D.week_no , count(*) as weekly_Bookings from fact_bookings as B
+join dim_date as D on B.check_in_date = D.date 
+group by 1,2) as W
+join dim_hotels as H on W.property_id = H.property_id
+group by 1
+order by 2 desc;
+
+                        ## 18) Cancilation Risk By Platform
+select booking_platform ,
+ round(sum(case when booking_status = "Cancelled" then 1 else 0 end)*100/count(*),2) as Cancellation_risk
+ from fact_bookings
+ group by 1
+ order by 2 desc;
+ 
+/*Select R.room_class, (sum(B.revenue_realized)/sum(F.capacity)) as RevPar From fact_bookings as B
+join dim_rooms as R
+on B.room_category = R.room_id
+join fact_aggregated_bookings as F
+on B.property_id = F.property_id
+group by 1
+order by 2 desc;*/
+
+									## 19) Lead Time Impact on Cancellation
+
+SELECT
+CASE
+ WHEN DATEDIFF(check_in_date, booking_date)<=2 THEN 'Last Minute'
+ WHEN DATEDIFF(check_in_date, booking_date)<=7 THEN 'Short Term'
+ ELSE 'Early Booking'
+END AS lead_group,
+ROUND(SUM(CASE WHEN booking_status='Cancelled' THEN 1 ELSE 0 END)*100.0/COUNT(*),2)
+AS cancel_rate
+FROM fact_bookings
+GROUP BY 1;
+
+							## 20)WeekEnd & Weekeday wise Price Priminum Analysis
+select D.day_type , sum(case when B.booking_status ="Checked Out" then B.revenue_realized else 0 end) as Pure_Revenue  from dim_date as D
+join fact_bookings as B 
+on D.date = B.check_in_date
+group by 1
+order by 2 desc;
+
+								## 21)City & Property wise Contribution 
+select 	H.city , H.property_name , sum(B.revenue_realized)*100/ sum(sum(B.revenue_realized))over ( partition by city) as City_Share
+from  dim_hotels as H join  fact_bookings as B	
+on B.property_id=H.property_id 
+group by 1,2
+order by 3 desc;
+
+                                 ## 22)Guest Relaibulity index By Platform
+select booking_platform, sum(case when booking_status = "Checked Out"  then 1 else 0 end)*100/count(*) as Checkedout_Booking_Rate,
+sum(case when booking_status = "No Show"  then 1 else 0 end)*100/count(*) as Noshow_Booking_Rate
+From fact_bookings
+group by 1
+order by 2,3 desc;
+
+
+                            
